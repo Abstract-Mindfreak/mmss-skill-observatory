@@ -812,9 +812,12 @@ export interface ProjectArchive {
       status: string;
       summary: string;
       result: unknown;
+      error?: string | null;
+      durationMs?: number | null;
+      fragmentCount?: number | null;
       createdAt: string;
     }[];
-    modelCalls: { id: string; role: string; action: string; contextMode: string; contextMetadata: unknown; messages: unknown; backend: string; connectionName: string | null; requestedModel: string | null; actualProvider: string | null; actualModel: string | null; status: string; relatedEntities: unknown; createdAt: string }[];
+    modelCalls: { id: string; runId: string | null; versionId: string | null; role: string; action: string; contextMode: string; contextMetadata: unknown; messages: unknown; backend: string; connectionName: string | null; requestedModel: string | null; actualProvider: string | null; actualModel: string | null; status: string; relatedEntities: unknown; createdAt: string }[];
     fragmentRefs?: { id: string; versionId: string; path: string; textHash: string }[];
     semanticIndexPolicy?: 'rebuild-on-import';
     semanticPositions?: {
@@ -823,7 +826,7 @@ export interface ProjectArchive {
       sourceFragmentRefs?: unknown; createdAt: string; updatedAt: string; fragments: { id: string; path: string; textHash: string }[];
     }[];
     semanticRelations?: { id: string; versionId: string; sourcePositionId: string; targetPositionId: string; kind: string; rationale: string; provenance: string; status: string; createdAt: string }[];
-    positionObservations?: { id: string; versionId: string; positionId: string; runId: string | null; noteId: string | null; observation: string; evidenceText: string; conditions: string; criterion: string; status: string; limitations: string; createdAt: string }[];
+    positionObservations?: { id: string; versionId: string; positionId: string; runId: string | null; noteId: string | null; sourceRunId?: string | null; sourceNoteId?: string | null; observation: string; evidenceText: string; conditions: string; criterion: string; status: string; limitations: string; createdAt: string }[];
     researchCampaigns?: unknown[];
     /** Connections excluded by default — may contain internal addresses. */
     connectionsIncluded: boolean;

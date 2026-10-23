@@ -10,6 +10,7 @@
 import { db } from '@/lib/db'
 import { cleanRunSkillText } from '@/lib/run-context-cleaner'
 import { parseResearchDiscrepancy } from '@/lib/research-discrepancy'
+import { makeCampaignProcessHistoryPortable } from '@/lib/archive-import-mapping'
 import {
   sha256Hex,
   safeParse,
@@ -446,6 +447,9 @@ export async function buildProjectArchive(
             status: a.status,
             summary: a.summary,
             result: safeParse<unknown>(a.result, null),
+            error: a.error,
+            durationMs: a.durationMs,
+            fragmentCount: a.fragmentCount,
             createdAt: a.createdAt.toISOString(),
           }))
         : [],
@@ -479,12 +483,14 @@ export async function buildProjectArchive(
       })) : [],
       positionObservations: has('semantic') && has('documents') ? data.positionObservations.map((observation) => ({
         id: observation.id, versionId: observation.versionId, positionId: observation.positionId,
-        runId: observation.runId, noteId: observation.noteId, observation: observation.observation,
+        runId: observation.runId, noteId: observation.noteId, sourceRunId: observation.sourceRunId, sourceNoteId: observation.sourceNoteId, observation: observation.observation,
         evidenceText: observation.evidenceText, conditions: observation.conditions, criterion: observation.criterion,
         status: observation.status, limitations: observation.limitations, createdAt: observation.createdAt.toISOString(),
       })) : [],
-      researchCampaigns: has('campaigns') ? data.campaigns.map((campaign) => ({
+      researchCampaigns: has('campaigns') ? data.campaigns.map(({ workerToken: _workerToken, workerLeaseUntil: _workerLeaseUntil, ...campaign }) => ({
         ...campaign,
+        processHistory: makeCampaignProcessHistoryPortable(safeParse<unknown[]>(campaign.processHistory, [])),
+        roles: campaign.roles.map(({ connectionId: _connectionId, ...role }) => role),
         budgetHistory: safeParse<unknown[]>(campaign.budgetHistory, []),
         items: campaign.items.map((item) => ({
           ...item,

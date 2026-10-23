@@ -8,10 +8,10 @@
 import { db } from '@/lib/db'
 import { safeParse, sha256Hex, toProjectDTO } from '@/lib/serialize'
 import { buildFragmentsForVersion } from '@/lib/parser'
-import { runLocalAnalysis } from '@/lib/analysis'
 import type { ProjectDTO } from '@/lib/types'
 import { parseResearchDiscrepancy, remapResearchDiscrepancyIds } from '@/lib/research-discrepancy'
 import { importedCampaignState } from '@/lib/research-campaign-core'
+import { remapCampaignProcessHistory, remapRunInputReferences } from '@/lib/archive-import-mapping'
 import { randomUUID } from 'node:crypto'
 
 export class ArchiveValidationError extends Error {
@@ -312,14 +312,13 @@ interface ImportResult {
 /**
  * Import an archive into a new project. All ids are re-generated; references
  * are remapped. Fragments are reconstructed from immutable version content;
- * local analysis is recalculated directly without a port-dependent HTTP call.
+ * analysis and research processes are never started automatically.
  */
 export async function importProjectArchive(archiveUnknown: unknown): Promise<ImportResult> {
   validateArchive(archiveUnknown)
   const archive = archiveUnknown as ArchiveShape
   const aProject = archive.project!
   const warnings: string[] = []
-  const importedVersionIds: string[] = []
 
   const created = await db.$transaction(
     async (tx) => {
@@ -375,7 +374,6 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
             },
           })
           if (typeof ver.id === 'string') versionIdMap.set(ver.id, newVer.id)
-          importedVersionIds.push(newVer.id)
           const fragmentPayloads = buildFragmentsForVersion(newVer.id, content)
           if (fragmentPayloads.length) await tx.fragment.createMany({ data: fragmentPayloads })
           const createdFragments = await tx.fragment.findMany({ where: { versionId: newVer.id }, select: { id: true, path: true, text: true } })
@@ -667,6 +665,8 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
             status: typeof a.status === 'string' ? a.status : 'completed',
             summary: typeof a.summary === 'string' ? a.summary : '',
             result: JSON.stringify(remapSourceIds(a.result, { modelCallIdMap, versionIdMap, fragmentIdMap })),
+            error: str(a.error),
+            durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
             fragmentCount: typeof a.fragmentCount === 'number' ? a.fragmentCount : null,
             createdAt: toDate(a.createdAt),
           },
@@ -691,13 +691,16 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         const refs = Array.isArray(raw.fragments) ? raw.fragments.filter(isPlainObject) : []
         const liveLinks = refs.flatMap((ref) => typeof ref.id === 'string' && fragmentIdMap.has(ref.id) ? [{ fragmentId: fragmentIdMap.get(ref.id)! }] : [])
         const historicalRefs = refs.filter((ref) => typeof ref.id !== 'string' || !fragmentIdMap.has(ref.id)).map((ref) => ({ id: str(ref.id), path: str(ref.path), textHash: str(ref.textHash) }))
+        if (historicalRefs.length) warnings.push(`положение «${String(raw.title ?? '')}»: ${historicalRefs.length} исходных ссылок не сопоставлены; они сохранены как исторические`)
+        const provenanceRef = typeof raw.provenanceRef === 'string' ? analysisIdMap.get(raw.provenanceRef) ?? null : null
+        if (typeof raw.provenanceRef === 'string' && !provenanceRef) warnings.push(`активная provenanceRef положения «${String(raw.title ?? '')}» не создана: Analysis отсутствует в архиве`)
         const importedPosition = await tx.semanticPosition.create({ data: {
           projectId: project.id, versionId: newVersionId,
           title: String(raw.title ?? 'Положение'), purpose: String(raw.purpose ?? ''),
           regulatedDecision: String(raw.regulatedDecision ?? ''), conditions: String(raw.conditions ?? ''),
           expectedBehavior: String(raw.expectedBehavior ?? ''), limitations: String(raw.limitations ?? ''),
           provenance: raw.provenance === 'model-interpret' ? 'model-interpret' : 'user',
-          provenanceRef: typeof raw.provenanceRef === 'string' ? analysisIdMap.get(raw.provenanceRef) ?? raw.provenanceRef : null,
+          provenanceRef,
           sourceFragmentRefs: JSON.stringify(remapSourceIds(raw.sourceFragmentRefs ?? historicalRefs, { modelCallIdMap, versionIdMap, fragmentIdMap, analysisIdMap })),
           status: ['proposed', 'accepted', 'disputed'].includes(String(raw.status)) ? String(raw.status) : 'proposed',
           createdAt: toDate(raw.createdAt), updatedAt: toDate(raw.updatedAt),
@@ -707,10 +710,10 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
       }
       const relations = Array.isArray(aProject.semanticRelations) ? aProject.semanticRelations : []
       for (const raw of relations) {
-        if (!isPlainObject(raw) || typeof raw.sourcePositionId !== 'string' || typeof raw.targetPositionId !== 'string') continue
+        if (!isPlainObject(raw) || typeof raw.sourcePositionId !== 'string' || typeof raw.targetPositionId !== 'string') { warnings.push('связь смысловых положений пропущена: отсутствуют корректные source/target ID'); continue }
         const sourcePositionId = positionIdMap.get(raw.sourcePositionId), targetPositionId = positionIdMap.get(raw.targetPositionId)
         const versionId = typeof raw.versionId === 'string' ? versionIdMap.get(raw.versionId) : null
-        if (!sourcePositionId || !targetPositionId || !versionId) continue
+        if (!sourcePositionId || !targetPositionId || !versionId) { warnings.push(`связь смысловых положений ${String(raw.id ?? '')} пропущена: source, target или версия отсутствуют в архиве`); continue }
         const newRelation = await tx.semanticRelation.create({ data: {
           projectId: project.id, versionId, sourcePositionId, targetPositionId,
           kind: String(raw.kind ?? 'supports'), rationale: String(raw.rationale ?? ''),
@@ -726,9 +729,9 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         if (!isPlainObject(raw) || typeof raw.positionId !== 'string') continue
         const positionId = positionIdMap.get(raw.positionId)
         const versionId = typeof raw.versionId === 'string' ? versionIdMap.get(raw.versionId) : null
-        if (!positionId || !versionId) continue
-        const oldRunId = typeof raw.runId === 'string' ? raw.runId : null
-        const oldNoteId = typeof raw.noteId === 'string' ? raw.noteId : null
+        if (!positionId || !versionId) { warnings.push(`наблюдение положения ${String(raw.id ?? '')} пропущено: положение или версия отсутствуют в архиве`); continue }
+        const oldRunId = typeof raw.runId === 'string' ? raw.runId : typeof raw.sourceRunId === 'string' ? raw.sourceRunId : null
+        const oldNoteId = typeof raw.noteId === 'string' ? raw.noteId : typeof raw.sourceNoteId === 'string' ? raw.sourceNoteId : null
         const runId = oldRunId ? runIdMap.get(oldRunId) ?? null : null
         const noteId = oldNoteId ? noteIdMap.get(oldNoteId) ?? null : null
         const importedObservation = await tx.positionObservation.create({ data: {
@@ -776,6 +779,7 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
       const campaignPositionIdMap = new Map<string, string>()
       const campaignCheckIdMap = new Map<string, string>()
       const campaignActionIdMap = new Map<string, string>()
+      const campaignPolicySnapshotMap = new Map<string, unknown>()
       const campaignArchives = Array.isArray(aProject.researchCampaigns) ? aProject.researchCampaigns.filter(isPlainObject) : []
       for (const source of campaignArchives) {
         const versionId = typeof source.versionId === 'string' ? versionIdMap.get(source.versionId) : null
@@ -790,13 +794,32 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         if (typeof sourceScope === 'string') {
           try { sourceScope = JSON.parse(sourceScope) as unknown } catch { sourceScope = {} }
         }
+        const sourcePolicy = isPlainObject(source.policy) ? { ...source.policy } : {
+          maxScenariosPerPosition: source.maxScenariosPerPosition,
+          maxModelActions: source.maxModelActions,
+          maxAdditionalChecksPerPosition: source.maxAdditionalChecksPerPosition,
+          maxRetriesPerAction: source.maxRetriesPerAction,
+          maxConcurrent: source.maxConcurrent,
+          stopOnQuota: source.stopOnQuota,
+          stopOnTechnicalError: source.stopOnTechnicalError,
+          allowRewriteExperiment: source.allowRewriteExperiment,
+          budgetHistory: source.budgetHistory,
+        }
+        const processHistory = Array.isArray(source.processHistory) ? source.processHistory
+          : typeof source.processHistory === 'string' ? safeParse<unknown[]>(source.processHistory, []) : []
+        const importedProcessHistory = [...processHistory]
+        if (sourcePolicy.allowRewriteExperiment === true || (typeof sourcePolicy.maxConcurrent === 'number' && sourcePolicy.maxConcurrent !== 1)) {
+          const policySnapshot = { at: new Date().toISOString(), action: 'imported-policy-snapshot', basis: 'Историческая policy исходной кампании; импортируемое выполнение использует безопасные настройки.', sourcePolicy }
+          importedProcessHistory.push(policySnapshot)
+          if (typeof source.id === 'string') campaignPolicySnapshotMap.set(source.id, policySnapshot)
+        }
         const campaign = await tx.researchCampaign.create({ data: {
           projectId: project.id, versionId, contentHash: String(source.contentHash ?? ''),
           scopeType: String(source.scopeType ?? 'positions'),
           scopeSnapshot: JSON.stringify(remapSourceIds(sourceScope, { modelCallIdMap, versionIdMap, fragmentIdMap, positionIdMap })),
           depth: String(source.depth ?? 'full'), maxScenariosPerPosition: Number(source.maxScenariosPerPosition ?? 2),
           predecessorCampaignId: null,
-          processHistory: JSON.stringify(Array.isArray(source.processHistory) ? source.processHistory : typeof source.processHistory === 'string' ? safeParse<unknown[]>(source.processHistory, []) : []),
+          processHistory: JSON.stringify(importedProcessHistory),
           maxModelActions: source.policy && isPlainObject(source.policy)
             ? (source.policy.maxModelActions === null ? null : Number(source.policy.maxModelActions ?? source.maxModelActions ?? 20))
             : (source.maxModelActions === null ? null : Number(source.maxModelActions ?? 20)),
@@ -818,7 +841,7 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         const roles = Array.isArray(source.roles) ? source.roles.filter(isPlainObject) : []
         for (const role of roles) await tx.researchCampaignRole.create({ data: {
           campaignId: campaign.id, role: String(role.role ?? 'executor'), backend: String(role.backend ?? 'unknown'),
-          connectionId: String(role.connectionId ?? 'source-connection-unavailable'), connectionName: String(role.connectionName ?? 'Источник архива'), model: String(role.model ?? 'unknown'),
+          connectionId: 'source-connection-unavailable', connectionName: String(role.connectionName ?? 'Источник архива'), model: String(role.model ?? 'unknown'),
         } })
         for (const item of sourceItems) {
           const positionId = typeof item.positionId === 'string' ? positionIdMap.get(item.positionId) : null
@@ -839,7 +862,7 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
           const checks = Array.isArray(item.checks) ? item.checks.filter(isPlainObject) : []
           for (const check of checks) {
             const scenarioId = typeof check.scenarioId === 'string' ? scenarioIdMap.get(check.scenarioId) : null
-            if (!scenarioId) continue
+            if (!scenarioId) { warnings.push(`критерий кампании ${String(check.id ?? '')} пропущен: сценарий отсутствует в архиве`); continue }
             const importedCheck = await tx.researchCampaignCheck.create({ data: {
               campaignPositionId: importedItem.id, scenarioId, ordinal: Number(check.ordinal ?? 0),
               objective: String(check.objective ?? ''), input: String(check.input ?? ''), expectedBehavior: String(check.expectedBehavior ?? ''),
@@ -850,6 +873,7 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
             for (const sourceRef of sources) {
               const fragmentId = typeof sourceRef.fragmentId === 'string' ? fragmentIdMap.get(sourceRef.fragmentId) : null
               if (fragmentId) await tx.researchCampaignCheckSource.create({ data: { checkId: importedCheck.id, fragmentId } })
+              else warnings.push(`источник критерия кампании ${String(check.id ?? '')} пропущен: фрагмент отсутствует в архиве`)
             }
           }
           const notApplicable = Array.isArray(item.notApplicableChecks) ? item.notApplicableChecks.filter(isPlainObject) : []
@@ -859,9 +883,12 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         }
         for (const action of sourceActions) {
           const campaignPositionId = typeof action.campaignPositionId === 'string' ? campaignPositionIdMap.get(action.campaignPositionId) : null
-          if (!campaignPositionId) continue
+          if (!campaignPositionId) { warnings.push(`действие кампании ${String(action.id ?? '')} пропущено: позиция отсутствует в архиве`); continue }
           const runId = typeof action.runId === 'string' ? runIdMap.get(action.runId) ?? null : null
           const checkId = typeof action.checkId === 'string' ? campaignCheckIdMap.get(action.checkId) ?? null : null
+          if (typeof action.runId === 'string' && !runId) warnings.push(`ссылка действия кампании ${String(action.id ?? '')} на Run не восстановлена: Run отсутствует в архиве`)
+          if (typeof action.checkId === 'string' && !checkId) warnings.push(`ссылка действия кампании ${String(action.id ?? '')} на критерий не восстановлена: критерий отсутствует в архиве`)
+          if (typeof action.scenarioId === 'string' && !scenarioIdMap.has(action.scenarioId)) warnings.push(`ссылка действия кампании ${String(action.id ?? '')} на сценарий не восстановлена: сценарий отсутствует в архиве`)
           const actionStatus = state === 'blocked-reconciliation' && (action.status === 'planned' || action.status === 'running') ? 'blocked' : String(action.status ?? 'planned')
           const importedAction = await tx.researchCampaignAction.create({ data: {
             actionKey: `import:${campaign.id}:${String(action.id ?? randomUUID())}`,
@@ -873,6 +900,7 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
             createdAt: toDate(action.createdAt), updatedAt: toDate(action.updatedAt),
             sources: { create: (Array.isArray(action.sources) ? action.sources.filter(isPlainObject) : []).flatMap((ref) => {
               const fragmentId = typeof ref.fragmentId === 'string' ? fragmentIdMap.get(ref.fragmentId) : null
+              if (!fragmentId) warnings.push(`источник действия кампании ${String(action.id ?? '')} пропущен: фрагмент отсутствует в архиве`)
               return fragmentId ? [{ fragmentId }] : []
             }) },
           } })
@@ -881,9 +909,22 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         }
       }
       for (const source of campaignArchives) {
-        if (!isPlainObject(source) || typeof source.id !== 'string' || typeof source.predecessorCampaignId !== 'string') continue
-        const importedId = campaignIdMap.get(source.id), predecessorId = campaignIdMap.get(source.predecessorCampaignId)
-        if (importedId && predecessorId) await tx.researchCampaign.update({ where: { id: importedId }, data: { predecessorCampaignId: predecessorId } })
+        if (!isPlainObject(source) || typeof source.id !== 'string') continue
+        const importedId = campaignIdMap.get(source.id)
+        if (typeof source.predecessorCampaignId === 'string') {
+          const predecessorId = campaignIdMap.get(source.predecessorCampaignId)
+          if (importedId && predecessorId) await tx.researchCampaign.update({ where: { id: importedId }, data: { predecessorCampaignId: predecessorId } })
+          else if (importedId) warnings.push(`предшествующая кампания ${source.predecessorCampaignId} отсутствует в архиве; локальная связь не создана`)
+        }
+        const importedIdForHistory = campaignIdMap.get(source.id)
+        const sourceHistory = Array.isArray(source.processHistory) ? source.processHistory : typeof source.processHistory === 'string' ? safeParse<unknown[]>(source.processHistory, []) : []
+        if (importedIdForHistory && sourceHistory.length) {
+          const { history: remappedHistory, warnings: historyWarnings } = remapCampaignProcessHistory(sourceHistory, campaignIdMap)
+          warnings.push(...historyWarnings)
+          const importedPolicySnapshot = campaignPolicySnapshotMap.get(source.id)
+          if (importedPolicySnapshot) remappedHistory.push(importedPolicySnapshot)
+          await tx.researchCampaign.update({ where: { id: importedIdForHistory }, data: { processHistory: JSON.stringify(remappedHistory) } })
+        }
       }
       if (campaignArchives.length) warnings.push('Подключения кампаний сохранены только как исторические снимки; импортированные незавершённые действия заблокированы для ручной сверки.')
       if (semanticPositions.length && aProject.semanticIndexPolicy === 'rebuild-on-import') {
@@ -931,7 +972,9 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
         if (importedCallId) {
           await tx.modelCall.update({ where: { id: importedCallId }, data: { runId: importedId } })
         }
-        await tx.run.update({ where: { id: importedId }, data: { input: JSON.stringify(input) } })
+        const runInputRefs = remapRunInputReferences(input, { versionIdMap, fragmentIdMap, scenarioIdMap, runIdMap })
+        warnings.push(...runInputRefs.warnings)
+        await tx.run.update({ where: { id: importedId }, data: { input: JSON.stringify(runInputRefs.input) } })
       }
 
       return project
@@ -939,11 +982,8 @@ export async function importProjectArchive(archiveUnknown: unknown): Promise<Imp
     { timeout: 60_000, maxWait: 10_000 }
   )
 
-  // ---- post-import: recalculate analysis without assuming a server port ----
-  const results = await Promise.allSettled(importedVersionIds.map((versionId) => runLocalAnalysis(versionId)))
-  const reanalyzed = results.filter((result) => result.status === 'fulfilled').length
-  if (results.some((result) => result.status === 'rejected')) {
-    warnings.push(`${results.length - reanalyzed} версия(и): локальный анализ не пересчитан; откройте Atlas и запустите локальный анализ вручную`)
+  if (!Array.isArray(aProject.analyses) || aProject.analyses.length === 0) {
+    warnings.push('Архив не содержит Analysis; если нужен локальный структурный разбор, запустите его вручную после импорта.')
   }
 
   const fresh = await db.project.findUnique({ where: { id: created.id } })

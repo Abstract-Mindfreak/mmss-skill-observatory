@@ -1,5 +1,7 @@
 # Worklog — MMSS Skill Observatory
 
+- 2026-10-23: Addressed ProjectArchive v1 losses without DB/archive round-trip: campaign exports omit connection IDs, `workerToken`, and `workerLeaseUntil`; Analysis includes optional-compatible `error`, `durationMs`, `fragmentCount`; modelCall contract includes exported `runId`/`versionId`; campaign history IDs remap or become `sourceRelatedCampaignId` with warnings; missing Analysis provenance becomes null with warning; skipped semantic/campaign links warn. Historical campaign policy is retained as `imported-policy-snapshot` while imported execution uses safe settings (`maxConcurrent=1`, `allowRewriteExperiment=false`) and no lease. Import no longer recalculates Analysis automatically; a missing Analysis produces a manual follow-up warning. Optional observation sourceRun/sourceNote refs now export and re-import. Added in-memory mapping tests. No archive created/opened/imported; no DB, model, embedding or working data accessed.
+- 2026-10-23: Closed the Run.input archive-remap gap for taskContext version/scenario/fragment refs, skillVerification version, responseMetadata context fragments, and process-control related runs. Missing targets are preserved as historical refs with warnings; prompts, sent messages, and free text are unchanged. Added in-memory resolved/missing-target regressions; no database or archive round-trip used.
 Общий журнал работы всех агентов. Каждый агент ДОписывает свою секцию ниже (никогда не перезаписывает чужие).
 
 ---
