@@ -1,0 +1,1418 @@
+{
+  "specification_id": "s2-automated-research-ui-2026-10",
+  "title": "S2 — интерфейс автоматизированного исследования инструкций",
+  "language": "ru",
+  "basis": {
+    "objective": "Спроектировать целостный пользовательский путь исследования инструкции на основе существующих данных и механизмов S2.",
+    "scope": "Этап 1: аудит и спецификация (снимок сохранён в отчёте). Этап 2: согласованное внедрение и приёмка по текущему заданию пользователя.",
+    "inspected_sources": [
+      {
+        "id": "src_live_browser",
+        "type": "browser",
+        "description": "S2 localhost:3102: Overview, Atlas search/positions/research/codemap/processing/campaign, Behavior Lab, Connections, Export."
+      },
+      {
+        "id": "src_project_api",
+        "type": "api_data",
+        "description": "Исследовательское состояние, campaigns, handoff и read-only project archive проекта cmvgroxrx002uved0g044hi2h."
+      },
+      {
+        "id": "src_project_code",
+        "type": "source_code",
+        "description": "Существующие компоненты SemanticCodemap, ResearchCampaignPanel и route handlers для research-state, campaign, handoff/export."
+      },
+      {
+        "id": "src_user_task",
+        "type": "user_requirements",
+        "description": "Пользовательское задание этапа 1/2 и разрешённые границы."
+      }
+    ],
+    "observed_problems": [
+      {
+        "id": "problem_campaign_state",
+        "evidence": [
+          "src_live_browser",
+          "src_project_api"
+        ],
+        "severity": "high",
+        "description": "Campaign completed показывается одновременно с exhausted budget и item states not-explored/blocked; у exhausted campaign виден Resume."
+      },
+      {
+        "id": "problem_long_lists",
+        "evidence": [
+          "src_live_browser"
+        ],
+        "severity": "medium",
+        "description": "Вкладки положений и исследования раскрывают большие длинные списки, затрудняя выбор записи и сравнение оснований."
+      },
+      {
+        "id": "problem_manual_action_centric",
+        "evidence": [
+          "src_live_browser"
+        ],
+        "severity": "high",
+        "description": "Behavior Lab организован вокруг ручного вызова отдельной роли; нет ведущего сквозного пути определения области, кампании и рассмотрения результата."
+      },
+      {
+        "id": "problem_route_labels",
+        "evidence": [
+          "src_live_browser",
+          "src_project_api"
+        ],
+        "severity": "medium",
+        "description": "Подключение/session-cloud и запрошенная auto-модель визуально смешаны; фактический provider/model виден не рядом с каждым результатом."
+      },
+      {
+        "id": "problem_technical_density",
+        "evidence": [
+          "src_live_browser"
+        ],
+        "severity": "medium",
+        "description": "Coverage, fragments, vector state и Analysis занимают отдельный длинный рабочий поток рядом с обычными исследовательскими задачами."
+      },
+      {
+        "id": "problem_analysis_status_conflict",
+        "evidence": [
+          "src_project_api",
+          "src_live_browser"
+        ],
+        "severity": "medium",
+        "description": "Analysis API status=running при summary/UI paused; требует согласованного представления status и detail."
+      }
+    ],
+    "requirements": [
+      {
+        "id": "req_research_home",
+        "text": "Дать главный путь: выбрать инструкцию и область, задать политику, явно запустить, отслеживать прогресс, рассмотреть результаты и отдельно принять пользовательское решение."
+      },
+      {
+        "id": "req_distinct_states",
+        "text": "Раздельно показывать выполнение кампании, обязательные проверки, автоматическое заключение и решение пользователя."
+      },
+      {
+        "id": "req_evidence",
+        "text": "Для каждого замечания показывать суть, источники, проверки, подтверждение/возражение, ограничения и допустимое действие."
+      },
+      {
+        "id": "req_route_provenance",
+        "text": "Показывать назначение роли, requested model и saved actual provider/model как отдельные поля; неизвестное помечать неизвестным."
+      },
+      {
+        "id": "req_progressive_detail",
+        "text": "Обычный режим краток; расширенная диагностика раскрывает policy, технические ID, raw errors, JSON и подробный coverage без сокрытия ошибок."
+      },
+      {
+        "id": "req_context_restore",
+        "text": "Возврат сохраняет проект, версию, query, фильтры и выбранный объект."
+      },
+      {
+        "id": "req_safe_open",
+        "text": "Открытие экранов и preview не запускает модель, embedding, кампанию или изменение данных."
+      }
+    ],
+    "constraints": [
+      "Этап 1 был read-only; этап 2 разрешает UI и минимальный связующий код, изолированные тестовые данные, backup и перезапуск именно S2.",
+      "Не менять рабочую инструкцию, назначения, историю или статусы; не импортировать в рабочую базу.",
+      "Не запускать реальные текстовые/embedding вызовы и не запускать, возобновлять или останавливать рабочие кампании.",
+      "Сохранить существующие исследовательские сущности и API; не объявлять новые endpoint существующими.",
+      "Порт приложения 3102; этап 2 явно разрешён текущим запросом.",
+      "Не принимать proposed/unverified результаты от имени пользователя и не применять правки автоматически."
+    ],
+    "assumptions": [
+      {
+        "id": "assumption_reuse",
+        "text": "Существующие campaign, semantic, Run, Evaluation и export сущности достаточны для первого внедрения интерфейса.",
+        "basis": "Текущие API и UI уже предоставляют эти сущности; mutation contracts требуется перепроверить перед этапом 2."
+      },
+      {
+        "id": "assumption_simple_advanced",
+        "text": "Обычный и расширенный режим могут быть представлениями одного состояния, а не отдельными системами.",
+        "basis": "Предлагаемая информационная архитектура."
+      }
+    ],
+    "unknowns": [
+      "История смены назначений между campaign snapshots не установлена.",
+      "Причина отсутствия actualProvider/actualModel у 7 старых failed ModelCall не установлена.",
+      "Не выполнена полная браузерная проверка всех loading/empty/error/partial и узких keyboard-only ветвей; часть подтверждена только кодом/изолированными тестами."
+    ],
+    "snapshot_ref": "docs/S2-CURRENT-RESEARCH-CLEAN-REPORT.md",
+    "unknowns_at_stage_1": [
+      "Не просмотрены браузером Scenario Tree, Failure Roads, Evolution Studio, Metrics, Assistant и Registry.",
+      "Не установлена история изменения назначений между campaign snapshots.",
+      "Не подтверждены конкретные semantics всех mutation endpoints, отмены, retry и идемпотентности; проверить до реализации.",
+      "У 7 failed ModelCall отсутствуют actualProvider/actualModel; причина отсутствия метаданных неизвестна.",
+      "Analysis API status и summary/UI расходятся; источник истины для унификации статуса требуется установить.",
+      "Search POST вызывает embedding и технически меняет status embeddingVector на stale при несовместимости; это побочное изменение должно быть удалено либо явно оформлено отдельным действием."
+    ],
+    "unknowns_review": [
+      {
+        "source_unknown": "Не просмотрены браузером Scenario Tree, Failure Roads, Evolution Studio, Metrics, Assistant и Registry.",
+        "state": "verified",
+        "result": "Эти существующие разделы были просмотрены в предыдущем read-only проходе; в текущей приёмке дополнительно пройдены Research setup, campaign result, fragment card и переход к Run. Подробная проверка всех их ветвей не заявляется.",
+        "basis": [
+          "src_live_browser",
+          "docs/S2-UI-IMPLEMENTATION-REPORT.md"
+        ]
+      },
+      {
+        "source_unknown": "Не установлена история изменения назначений между campaign snapshots.",
+        "state": "unknown",
+        "result": "Текущие назначения и сохранённый снимок конкретной кампании различимы; хронология изменений не восстановлена.",
+        "basis": [
+          "src_project_api"
+        ]
+      },
+      {
+        "source_unknown": "У 7 failed ModelCall отсутствуют actualProvider/actualModel; причина отсутствия метаданных неизвестна.",
+        "state": "unknown",
+        "result": "Старые записи сохранены без выдумывания actual provider/model.",
+        "basis": [
+          "src_project_api"
+        ]
+      },
+      {
+        "source_unknown": "Analysis API status и summary/UI расходятся; источник истины для унификации статуса требуется установить.",
+        "state": "partially_verified",
+        "result": "Текущая UI-модель кампании показывает execution, checks, automated conclusion и user decision раздельно. Причина исторического расхождения Analysis не установлена.",
+        "basis": [
+          "src_project_api",
+          "src_live_browser"
+        ]
+      },
+      {
+        "source_unknown": "Search POST вызывает embedding и технически меняет status embeddingVector на stale при несовместимости; это побочное изменение должно быть удалено либо явно оформлено отдельным действием.",
+        "state": "verified",
+        "result": "Код и тест подтверждают read-only reporting stale compatibility; в этой приёмке поисковый embedding-запрос не запускался.",
+        "basis": [
+          "src_project_code",
+          "src_live_browser"
+        ]
+      },
+      {
+        "source_unknown": "Не подтверждены конкретные semantics всех mutation endpoints, отмены, retry и идемпотентности; проверить до реализации.",
+        "state": "verified",
+        "result": "Проверены route handlers и существующие изолированные tests с mock executor; проверка не является реальным запуском модели.",
+        "basis": [
+          "src_project_code",
+          "scripts/s2-isolated-research-ui-acceptance.mjs"
+        ]
+      }
+    ]
+  },
+  "information_architecture": {
+    "recommended_workspace": "research",
+    "workspaces": [
+      {
+        "id": "workspace_research",
+        "name": "Исследование",
+        "responsibility": "Домашний экран: сводка проекта и версии, сохранённые кампании и переход к настройке нового исследования.",
+        "required": true,
+        "implementation_status": "implemented"
+      },
+      {
+        "id": "workspace_atlas",
+        "name": "Instruction Atlas",
+        "responsibility": "Поиск и исходный текст; положения, связи, связанные сценарии и записи.",
+        "required": true,
+        "implementation_status": "existing"
+      },
+      {
+        "id": "workspace_scenarios",
+        "name": "Scenario Tree / Behavior Lab",
+        "responsibility": "Подготовка сценариев и отдельные ручные запуски ролей.",
+        "required": true,
+        "implementation_status": "existing_as_linked_workspaces"
+      },
+      {
+        "id": "workspace_changes",
+        "name": "Evolution Studio",
+        "responsibility": "Существующее рабочее пространство версий и предложений изменений.",
+        "required": false,
+        "implementation_status": "existing"
+      },
+      {
+        "id": "workspace_settings",
+        "name": "Подключения",
+        "responsibility": "Существующие подключения и назначения ролей.",
+        "required": true,
+        "implementation_status": "existing"
+      },
+      {
+        "id": "workspace_diagnostics",
+        "name": "Расширенная диагностика",
+        "responsibility": "Переход к существующим панелям обработки, coverage, fragments, vectors, Analysis и ошибок в Atlas.",
+        "required": true,
+        "implementation_status": "linked_existing_panels"
+      },
+      {
+        "id": "workspace_export",
+        "name": "Экспорт и передача",
+        "responsibility": "Handoff и полный архив с отдельным управлением полнотой.",
+        "required": true,
+        "implementation_status": "existing"
+      }
+    ],
+    "navigation_map": [
+      {
+        "current": "Обзор",
+        "target": "workspace_research",
+        "route": "Исследование — домашний экран"
+      },
+      {
+        "current": "Instruction Atlas",
+        "target": "workspace_atlas",
+        "route": "Навигация → Instruction Atlas"
+      },
+      {
+        "current": "Автоматическое исследование",
+        "target": "workspace_research",
+        "route": "Исследование → Начать новое исследование → Область → Политика → Проверка и запуск"
+      },
+      {
+        "current": "Scenario Tree / Behavior Lab",
+        "target": "workspace_scenarios",
+        "route": "Связанные инструменты или общая навигация → Сценарии / Behavior Lab"
+      },
+      {
+        "current": "Failure Roads / Карта правил",
+        "target": "workspace_atlas",
+        "route": "Общая навигация → существующий инструмент"
+      },
+      {
+        "current": "Evolution Studio",
+        "target": "workspace_changes",
+        "route": "Общая навигация → Evolution Studio"
+      },
+      {
+        "current": "Метрики / Реестр статусов",
+        "target": "workspace_diagnostics",
+        "route": "Общая навигация; диагностика также связана с Исследованием"
+      },
+      {
+        "current": "Подключения",
+        "target": "workspace_settings",
+        "route": "Общая навигация → Подключения"
+      },
+      {
+        "current": "Экспорт и передача",
+        "target": "workspace_export",
+        "route": "Связанные инструменты или общая навигация → Экспорт и передача"
+      },
+      {
+        "current": "Помощник",
+        "target": "workspace_atlas",
+        "route": "Общая навигация → Помощник"
+      }
+    ],
+    "first_screen": {
+      "title": "Исследование",
+      "shows": [
+        "название проекта и выбранная версия с коротким hash",
+        "краткая сводка положений, расхождений, неопределённости и блокировок",
+        "текущая кампания и сохранённые кампании с их состоянием и причиной",
+        "кнопка Начать новое исследование либо Продолжить черновик",
+        "связанные инструменты: Instruction Atlas, Behavior Lab, Сценарии, Расширенная диагностика, Экспорт и передача"
+      ],
+      "setup_flow": [
+        "Область: Положения / Разделы / Вся версия; поиск и ограниченный список",
+        "Политика: глубина, лимиты, retry, остановки и снимок назначений только нужных ролей; embedding отдельно",
+        "Проверка и запуск: версия/hash, выбранная область, известный материал и предупреждение о динамических шагах",
+        "явное Проверить и сохранить кампанию; затем отдельный Начать выполнение с подтверждением"
+      ],
+      "side_effects_on_open": []
+    },
+    "display_modes": [
+      {
+        "id": "ordinary",
+        "name": "Обычный",
+        "shows": "Current stage, status, key evidence, blocker and next allowed action."
+      },
+      {
+        "id": "advanced",
+        "name": "Расширенная диагностика",
+        "shows": "Policies, action/Run/ModelCall IDs, raw errors, JSON, coverage and detailed provenance."
+      }
+    ]
+  },
+  "flows": [
+    {
+      "id": "flow_start_campaign",
+      "goal": "Настроить область и политику и явно запустить автоматическое исследование.",
+      "entry": "workspace_research",
+      "required_data": [
+        "project",
+        "active version",
+        "available positions/fragments",
+        "current role assignments",
+        "campaign policy"
+      ],
+      "steps": [
+        "в Исследовании нажать Начать новое исследование или Продолжить черновик",
+        "в шаге Область выбрать Положения, Разделы или Вся версия, отфильтровать и отметить элементы",
+        "нажать Далее: Политика; выбрать глубину и доступные лимиты; проверить назначения только требуемых ролей и отдельное embedding-назначение",
+        "нажать Далее: Проверка; сверить проект/версию/hash, выбранную область, политику и известный отправляемый материал",
+        "закрыть настройку для сохранения черновика либо нажать Проверить и сохранить кампанию",
+        "только после создания подготовленной кампании отдельно нажать Начать выполнение и подтвердить"
+      ],
+      "result": "A visible campaign with policy snapshot, selected scope and linked action records.",
+      "errors": [
+        "stale version",
+        "missing role assignment",
+        "invalid policy",
+        "API failure",
+        "no eligible positions"
+      ],
+      "empty_states": [
+        "No positions match filter",
+        "No functional index; explain available source-text route"
+      ],
+      "cancel_return": "К исследованию возвращает домой; черновик хранится в sessionStorage текущей вкладки и может быть продолжен. До явного сохранения кампания не создаётся.",
+      "context_preservation": [
+        "project",
+        "version",
+        "scope",
+        "filters",
+        "policy draft"
+      ],
+      "mutation": {
+        "trigger": "Explicit Start action",
+        "confirmation": "Preview and confirmation before campaign creation",
+        "effect": "Проверить и сохранить кампанию создаёт состояние prepared; Start/advance является отдельным явным действием.",
+        "reversibility": "Execution cannot be undone; stopping may only halt future work."
+      }
+    },
+    {
+      "id": "flow_monitor_campaign",
+      "goal": "Понять прогресс, блокировки, фактический маршрут и возможность продолжения.",
+      "entry": "campaign detail",
+      "required_data": [
+        "campaign state",
+        "policy",
+        "items",
+        "actions",
+        "linked Run/ModelCall",
+        "provider actual metadata"
+      ],
+      "steps": [
+        "открыть сохранённые результаты кампании",
+        "сверить Исполнение очереди, обязательные проверки, автоматическое заключение и решение пользователя как отдельные состояния",
+        "прочитать причину остановки и действие, допустимое для текущего статуса",
+        "открыть связанный Run, Scenario или исходный Fragment",
+        "сверить назначение/requested model с actual provider/model только если фактические метаданные сохранены"
+      ],
+      "result": "Campaign state is distinct from check completion, automated conclusion and user decision.",
+      "errors": [
+        "API unavailable",
+        "partial action list",
+        "missing actual provider/model",
+        "stale campaign snapshot"
+      ],
+      "empty_states": [
+        "Campaign has no actions",
+        "No saved actual provider/model; label unknown"
+      ],
+      "cancel_return": "Back preserves campaign and selected item. Pause/resume/cancel controls only appear if supported by current API/state.",
+      "context_preservation": [
+        "campaign",
+        "selected position",
+        "expanded evidence",
+        "scroll/focus where feasible"
+      ],
+      "mutation": {
+        "trigger": "Explicit allowed pause/resume/stop command",
+        "confirmation": "Required when it interrupts active work",
+        "effect": "Calls existing mutation contract only",
+        "reversibility": "Must be described from verified backend semantics; unknown until implementation review."
+      }
+    },
+    {
+      "id": "flow_review_result",
+      "goal": "Рассмотреть основание автоматического замечания, ограничения и возможные действия.",
+      "entry": "campaign item or research result",
+      "required_data": [
+        "position",
+        "source refs",
+        "check/Run",
+        "evaluation",
+        "observation",
+        "discrepancy/note if any",
+        "status and provenance"
+      ],
+      "steps": [
+        "show concise claim and independent statuses",
+        "open source and tested criterion",
+        "compare supporting and contradicting evidence",
+        "show unknowns and actual provider/model",
+        "offer separately: record user decision, prepare proposed edit, or request another check"
+      ],
+      "result": "A reviewable evidence record; no automatic acceptance or instruction change.",
+      "errors": [
+        "missing source ref",
+        "unavailable linked Run",
+        "unverified observation",
+        "partial history"
+      ],
+      "empty_states": [
+        "No supporting evidence",
+        "No user decision",
+        "No linked scenario or observation"
+      ],
+      "cancel_return": "Return to exact campaign item or search result with query and filters intact.",
+      "context_preservation": [
+        "origin route",
+        "query",
+        "filters",
+        "selected result",
+        "version"
+      ],
+      "mutation": {
+        "trigger": "Separate user decision or edit action",
+        "confirmation": "Explicit confirmation before status change or applying edits",
+        "effect": "Updates only the selected existing record through verified API",
+        "reversibility": "Depends on existing audit/history semantics; verify before implementation."
+      }
+    },
+    {
+      "id": "flow_find_position",
+      "goal": "Найти положение или фрагмент и перейти к его источнику и связанным исследовательским записям.",
+      "entry": "workspace_atlas",
+      "required_data": [
+        "project version",
+        "search index or source text",
+        "positions/fragments",
+        "relations and linked records"
+      ],
+      "steps": [
+        "search/select mode explicitly",
+        "enter query or filter",
+        "review compact results and closeness label",
+        "open detail panel",
+        "navigate to sources/scenarios/runs/observations",
+        "return while preserving query"
+      ],
+      "result": "Selected object with source and linked evidence where present.",
+      "errors": [
+        "index unavailable",
+        "partial/stale index",
+        "search API error"
+      ],
+      "empty_states": [
+        "No matches",
+        "Nearest matches are not an answer",
+        "No linked research record"
+      ],
+      "cancel_return": "Back to result list without clearing query or mode.",
+      "context_preservation": [
+        "query",
+        "search mode",
+        "topK/filter",
+        "selected position",
+        "version"
+      ],
+      "mutation": {
+        "trigger": "Search/open only",
+        "confirmation": "Not applicable",
+        "effect": "Read-only; query embedding is permitted only after explicit Search",
+        "reversibility": "No research record mutation."
+      }
+    },
+    {
+      "id": "flow_export",
+      "goal": "Передать краткий отчёт или полный архив с честно обозначенными omissions.",
+      "entry": "workspace_export",
+      "required_data": [
+        "selected project/version",
+        "report/archive selection",
+        "instruction inclusion option",
+        "available provenance"
+      ],
+      "steps": [
+        "choose report or archive",
+        "review included parts and instruction-text choice",
+        "show warnings for omitted/legacy unknown data",
+        "export selected artifact"
+      ],
+      "result": "Export with explicit scope and provenance.",
+      "errors": [
+        "export API failure",
+        "missing metadata",
+        "large archive"
+      ],
+      "empty_states": [
+        "No matching records",
+        "Legacy composition unknown"
+      ],
+      "cancel_return": "Return to prior object without changing project data.",
+      "context_preservation": [
+        "project",
+        "version",
+        "selected export format/options"
+      ],
+      "mutation": {
+        "trigger": "Explicit Export",
+        "confirmation": "Show privacy/content summary",
+        "effect": "Produces a file; does not edit research history",
+        "reversibility": "Export copy may be discarded; source is unchanged."
+      }
+    },
+    {
+      "id": "flow_process_center",
+      "goal": "Наблюдать и управлять существующими долгими процессами без создания второго scheduler.",
+      "entry": "Процессы и очередь или индикатор активности в header",
+      "required_data": [
+        "project and version",
+        "campaign/action/Run/ModelCall links where persisted",
+        "Analysis state",
+        "local executor ownership",
+        "actual provider/model only when saved"
+      ],
+      "steps": [
+        "открыть текущий проект или явно переключить список на все проекты",
+        "отфильтровать по типу/состоянию и выбрать процесс",
+        "просмотреть связанные записи и реальные основания статуса",
+        "использовать только действие, разрешённое backend для выбранного типа/состояния; для зависшего running указать основание сверки",
+        "скрыть остановленную/завершённую запись только локальным предпочтением списка и вернуть её через фильтр"
+      ],
+      "result": "Проекция campaign → action → Run/ModelCall, плюс отдельные Run, direct ModelCall и Analysis operations; фиктивные Run не создаются.",
+      "mutation": {
+        "trigger": "Явная кнопка с подтверждением там, где действие прерывает/повторяет работу",
+        "effect": "Управление делегируется существующим campaign engine, registries, Run/ModelCall APIs и contour API. Late response не отменяет локальный stopped/cancelled статус.",
+        "reversibility": "Archive в центре процессов скрывает только запись в данном браузере; исследовательские записи не удаляются."
+      },
+      "limits": [
+        "Общий список не означает общего scheduler.",
+        "Embedding indexOne не имеет индивидуального cancel controller и показывается без ложной кнопки остановки.",
+        "Browser mutation pass не выполнен в этой проверке; изолированные проверки используют mock и не являются реальными модельными вызовами."
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "component_research_home",
+      "responsibility": "Area/policy setup and last campaign entry point.",
+      "inputs": [
+        "project/version",
+        "positions",
+        "role assignments",
+        "campaign summaries"
+      ],
+      "actions": [
+        "filter/select scope",
+        "edit policy draft",
+        "preview",
+        "start explicitly",
+        "open previous campaign"
+      ],
+      "outputs_side_effects": "Read-only until explicit Start; then existing campaign creation.",
+      "constraints": [
+        "No automatic LLM call on open",
+        "Show embedding assignment separately"
+      ],
+      "existing_component": "ResearchStudio (`src/components/studios/research-studio.tsx`) поверх существующего ResearchCampaignPanel/API",
+      "change_type": "implemented"
+    },
+    {
+      "id": "component_campaign_status",
+      "responsibility": "Represent campaign progress and item/check/conclusion/user decision separately.",
+      "inputs": [
+        "campaign",
+        "items",
+        "actions",
+        "Run/ModelCall provenance"
+      ],
+      "actions": [
+        "open evidence",
+        "valid pause/resume/stop",
+        "retry only when policy permits"
+      ],
+      "outputs_side_effects": "Read-only display; explicit state commands use existing API.",
+      "constraints": [
+        "Never imply completed research from campaign status alone",
+        "No invisible provider fallback"
+      ],
+      "existing_component": "ResearchCampaignPanel",
+      "change_type": "implemented"
+    },
+    {
+      "id": "component_result_review",
+      "responsibility": "Evidence-led review of a possible problem or result.",
+      "inputs": [
+        "claim",
+        "source refs",
+        "check/run/evaluation",
+        "observation",
+        "limits",
+        "user decision"
+      ],
+      "actions": [
+        "open source/run",
+        "record explicit decision",
+        "prepare proposed change",
+        "request explicit check"
+      ],
+      "outputs_side_effects": "Navigation read-only; decisions/edits mutate only after explicit action.",
+      "constraints": [
+        "Proposed/unverified remain clearly labeled",
+        "No auto-Finding or acceptance"
+      ],
+      "existing_component": "Campaign detail, карточка Fragment/Atlas и Behavior Lab Run detail; переходы через существующую навигацию",
+      "change_type": "partially_implemented"
+    },
+    {
+      "id": "component_route_provenance",
+      "responsibility": "Display assignment, requested model and actual provider/model as distinct facts.",
+      "inputs": [
+        "role assignment",
+        "campaign policy snapshot",
+        "ModelCall actual metadata"
+      ],
+      "actions": [
+        "open connection details"
+      ],
+      "outputs_side_effects": "Read-only display.",
+      "constraints": [
+        "Do not infer provider from model name",
+        "Missing actual metadata displays unknown"
+      ],
+      "existing_component": "Connection role summary and ModelCall DTOs",
+      "change_type": "implemented"
+    },
+    {
+      "id": "component_source_detail",
+      "responsibility": "Compact position/fragment detail with provenance and linked records.",
+      "inputs": [
+        "position",
+        "source fragments",
+        "relations",
+        "scenarios",
+        "runs",
+        "observations",
+        "decisions"
+      ],
+      "actions": [
+        "open source",
+        "open linked record",
+        "back to query"
+      ],
+      "outputs_side_effects": "Read-only navigation.",
+      "constraints": [
+        "Bounded lists",
+        "Preserve search state",
+        "Long text collapsed by default"
+      ],
+      "existing_component": "SemanticCodemap and Atlas search/details",
+      "change_type": "implemented_with_existing_routes"
+    },
+    {
+      "id": "component_diagnostics",
+      "responsibility": "Technical Analysis, coverage, vectors, fragments and raw errors.",
+      "inputs": [
+        "research state",
+        "Analysis",
+        "fragment pages",
+        "index status",
+        "errors"
+      ],
+      "actions": [
+        "filter/page",
+        "copy technical IDs/JSON",
+        "run explicit processing command where supported"
+      ],
+      "outputs_side_effects": "Read-only by default; processing only after explicit confirmation.",
+      "constraints": [
+        "Do not put batch controls on ordinary first screen",
+        "Never truncate silently"
+      ],
+      "existing_component": "Atlas Processing/Index panels linked by «Расширенная диагностика»; technical panels are not hidden or migrated into a new mode",
+      "change_type": "existing_linked"
+    },
+    {
+      "id": "component_research_notes",
+      "responsibility": "Optional display of factual events and short policy explanations.",
+      "inputs": [
+        "existing campaign/action/Run events",
+        "already-saved explanation when available",
+        "source refs"
+      ],
+      "actions": [
+        "toggle display",
+        "filter",
+        "open sources",
+        "opt-in export"
+      ],
+      "outputs_side_effects": "No model call; no required persistent write for initial UI.",
+      "constraints": [
+        "Event log and explanation are distinct",
+        "Model text is not hidden reasoning",
+        "Absence is valid"
+      ],
+      "existing_component": null,
+      "change_type": "partially_implemented",
+      "required": false
+    },
+    {
+      "id": "process_center",
+      "name": "Процессы и очередь",
+      "required": true,
+      "implementation_status": "implemented",
+      "verification_status": "isolated_behavior_verified_browser_mutations_unverified",
+      "responsibility": "Bounded project-scoped projection with filters, details, honest route provenance, supported controls, and browser-local archive preference."
+    }
+  ],
+  "state_model": {
+    "states": [
+      {
+        "id": "loading",
+        "display": "Загружается",
+        "rule": "Skeleton with retained project/version context."
+      },
+      {
+        "id": "empty",
+        "display": "Нет данных",
+        "rule": "Explain why and offer only valid next action."
+      },
+      {
+        "id": "error",
+        "display": "Ошибка",
+        "rule": "Keep error visible with retry only when safe."
+      },
+      {
+        "id": "stale",
+        "display": "Данные устарели",
+        "rule": "Show timestamp/version and explicit refresh."
+      },
+      {
+        "id": "partial",
+        "display": "Часть данных недоступна",
+        "rule": "Show available and missing portions separately."
+      },
+      {
+        "id": "paused",
+        "display": "Приостановлено",
+        "rule": "Show reason and whether resumption is actually possible."
+      },
+      {
+        "id": "completed",
+        "display": "Действия завершены",
+        "rule": "Do not imply required checks or user decisions are complete."
+      },
+      {
+        "id": "cancellation",
+        "display": "Отменяется/остановлено",
+        "rule": "Use only verified API semantics; distinguish request from confirmed terminal state."
+      },
+      {
+        "id": "imported_needs_reconciliation",
+        "display": "Импортировано — нужна сверка",
+        "rule": "Never present stale refs/statuses as current until reconciled."
+      },
+      {
+        "id": "policy_budget_exhausted",
+        "display": "Остановлено: предел действий политики",
+        "rule": "Это лимит проекта/кампании, не quota провайдера; не предлагать resume без увеличения лимита или нового запуска."
+      },
+      {
+        "id": "provider_quota_or_rate_limit",
+        "display": "Остановлено: квота или rate limit провайдера",
+        "rule": "Не переключать backend скрыто; возобновлять только после доступности провайдера и допустимости состояния."
+      },
+      {
+        "id": "upstream_transient_error",
+        "display": "Остановлено: временная ошибка провайдера/сети",
+        "rule": "Показывать сохранённую ошибку и разрешённый retry; не создавать параллельный Run."
+      },
+      {
+        "id": "application_error",
+        "display": "Ошибка приложения",
+        "rule": "Сохранять подробность ошибки; retry только если handler считает действие безопасным."
+      },
+      {
+        "id": "user_paused",
+        "display": "Приостановлено пользователем",
+        "rule": "Resume доступен только при совпадении версии и отсутствии исчерпанного лимита/неразрешённой сверки."
+      },
+      {
+        "id": "user_cancelled",
+        "display": "Остановлено пользователем",
+        "rule": "Терминальное состояние; исторические действия и сообщения остаются доступными."
+      },
+      {
+        "id": "unknown_stop_reason",
+        "display": "Причина остановки неизвестна",
+        "rule": "Не выводить причину из статуса; показать только доступные факты."
+      }
+    ],
+    "mutation_safety": "Inspection and preview are read-only. Start, retry, pause/resume/stop, user decisions, edit application and export have separate explicit triggers and truthful effects. No action runs merely because a panel opens."
+  },
+  "decision_trace": [
+    {
+      "requirement": "req_research_home",
+      "decision": "decision_campaign_first",
+      "components": [
+        "component_research_home",
+        "component_campaign_status"
+      ],
+      "flows": [
+        "flow_start_campaign",
+        "flow_monitor_campaign"
+      ],
+      "acceptance": "accept_home_to_campaign"
+    },
+    {
+      "requirement": "req_distinct_states",
+      "decision": "decision_four_state_lanes",
+      "components": [
+        "component_campaign_status",
+        "component_result_review"
+      ],
+      "flows": [
+        "flow_monitor_campaign",
+        "flow_review_result"
+      ],
+      "acceptance": "accept_state_distinction"
+    },
+    {
+      "requirement": "req_evidence",
+      "decision": "decision_evidence_first_review",
+      "components": [
+        "component_result_review",
+        "component_source_detail"
+      ],
+      "flows": [
+        "flow_review_result",
+        "flow_find_position"
+      ],
+      "acceptance": "accept_evidence_navigation"
+    },
+    {
+      "requirement": "req_route_provenance",
+      "decision": "decision_route_provenance_labels",
+      "components": [
+        "component_route_provenance",
+        "component_campaign_status"
+      ],
+      "flows": [
+        "flow_monitor_campaign"
+      ],
+      "acceptance": "accept_route_truth"
+    },
+    {
+      "requirement": "req_progressive_detail",
+      "decision": "decision_ordinary_advanced",
+      "components": [
+        "component_diagnostics",
+        "component_result_review"
+      ],
+      "flows": [
+        "flow_review_result",
+        "flow_find_position"
+      ],
+      "acceptance": "accept_progressive_detail"
+    },
+    {
+      "requirement": "req_context_restore",
+      "decision": "decision_contextual_back",
+      "components": [
+        "component_source_detail"
+      ],
+      "flows": [
+        "flow_find_position",
+        "flow_review_result"
+      ],
+      "acceptance": "accept_context_restore"
+    },
+    {
+      "requirement": "req_safe_open",
+      "decision": "decision_no_side_effect_open",
+      "components": [
+        "component_research_home",
+        "component_diagnostics"
+      ],
+      "flows": [
+        "flow_start_campaign",
+        "flow_find_position"
+      ],
+      "acceptance": "accept_read_only_open"
+    }
+  ],
+  "design_decisions": [
+    {
+      "id": "decision_campaign_first",
+      "text": "Сделать Исследование главным входом; ручные инструменты оставить доступными как связанные рабочие пространства.",
+      "basis": [
+        "req_research_home",
+        "problem_manual_action_centric"
+      ]
+    },
+    {
+      "id": "decision_four_state_lanes",
+      "text": "Раздельно отображать исполнение кампании, проверки, автоматическое заключение и пользовательское решение.",
+      "basis": [
+        "req_distinct_states",
+        "problem_campaign_state"
+      ]
+    },
+    {
+      "id": "decision_evidence_first_review",
+      "text": "Рассматривать результат через источники, критерий, подтверждение, возражение и ограничения.",
+      "basis": [
+        "req_evidence"
+      ]
+    },
+    {
+      "id": "decision_route_provenance_labels",
+      "text": "Разделить назначение, requested model и фактически сохранённые provider/model.",
+      "basis": [
+        "req_route_provenance",
+        "problem_route_labels"
+      ]
+    },
+    {
+      "id": "decision_ordinary_advanced",
+      "text": "Использовать обычный и расширенный уровень деталей, не скрывая ошибки.",
+      "basis": [
+        "req_progressive_detail",
+        "problem_technical_density"
+      ]
+    },
+    {
+      "id": "decision_contextual_back",
+      "text": "Сохранять query, фильтры, версию и выбранную запись при переходе к деталям и обратно.",
+      "basis": [
+        "req_context_restore"
+      ]
+    },
+    {
+      "id": "decision_no_side_effect_open",
+      "text": "Открытие панели и preview остаются read-only; запуск требует явного действия пользователя.",
+      "basis": [
+        "req_safe_open"
+      ]
+    }
+  ],
+  "optional_process_notes": {
+    "required": false,
+    "implementation_status": "partially_implemented",
+    "purpose": "Показать проверяемую связь события и основания следующего шага без реконструкции скрытого мышления.",
+    "sources": [
+      "campaign events",
+      "actions",
+      "Run/Evaluation",
+      "source refs",
+      "already-saved short model explanation if present"
+    ],
+    "format": [
+      "type",
+      "short text",
+      "linked step/run/decision",
+      "sources",
+      "timestamp if saved"
+    ],
+    "distinction_from_event_log": "Event log records what happened; explanatory note states a concise, sourced policy reason. They have different labels and provenance.",
+    "display": "Opt-in toggle, filters, collapsed source details.",
+    "constraints": [
+      "No additional model calls",
+      "No chain-of-thought",
+      "No requirement that every step have a note",
+      "No causal claim that skill caused a choice"
+    ],
+    "export": "Excluded unless explicitly opted in.",
+    "implementation_evidence": "UI exposes an opt-in factual campaign event list from existing saved action/run data. It does not generate explanatory notes, infer hidden reasoning, or add note export."
+  },
+  "implementation": {
+    "stages": [
+      {
+        "id": "stage_contract_audit",
+        "required": true,
+        "implementation_status": "implemented",
+        "verification_status": "verified",
+        "work": "Existing handlers reviewed; campaign mutation/idempotency and mock execution covered on isolated SQLite."
+      },
+      {
+        "id": "stage_research_home",
+        "required": true,
+        "implementation_status": "implemented",
+        "verification_status": "browser_checked",
+        "work": "Research home shows project/version summary, campaigns, linked tools; setup proceeds through staged scope, policy and preview."
+      },
+      {
+        "id": "stage_progress_review",
+        "required": true,
+        "implementation_status": "implemented",
+        "verification_status": "partial_browser_and_isolated",
+        "work": "Рабочий браузер открыл сохранённую кампанию, показал четыре полосы состояния и прошёл источник → Run/Behavior Lab. Изолированный mock API завершил одну очередь после явного start. Возврат observation/discrepancy и все ветви не проходили."
+      },
+      {
+        "id": "stage_navigation_diagnostics",
+        "required": true,
+        "implementation_status": "partially_implemented",
+        "verification_status": "partial",
+        "work": "Existing workspaces remain reachable and diagnostic panels are linked; not all technical tools were moved into a dedicated advanced mode. This does not block the accepted Research setup/review route."
+      },
+      {
+        "id": "stage_notes",
+        "required": false,
+        "implementation_status": "partially_implemented",
+        "verification_status": "not_fully_checked",
+        "work": "Factual saved-event list is opt-in; explanatory process notes and export remain optional and absent."
+      },
+      {
+        "id": "stage_themes_and_process_center",
+        "required": true,
+        "implementation_status": "implemented",
+        "verification_status": "isolated_tests_passed_browser_partial",
+        "work": "Shared light/dark surface tokens are tinted by five independent palettes. Process Center projects existing campaign, action, Run, ModelCall and Analysis ownership; supported lifecycle actions are explicit. Browser inspection covered rendered queue/theme/mobile layout, while mutation controls were covered only by isolated mock acceptance."
+      },
+      {
+        "id": "stage_scenario_provenance_and_recovery",
+        "required": true,
+        "implementation_status": "implemented",
+        "verification_status": "isolated_transport_retry_passed_real_retry_unverified",
+        "work": "Explorer separates source requirement, test condition, derived expected behavior and hypotheses in existing fields. Evaluator receives source text and returns inconclusive when criterion basis is unsupported. Retry classifier is narrow; cancellation, quota, exhausted attempts, budget accounting and late Run reuse were checked with mocks. Historical campaign remains unchanged; browser review is still blocked by localhost URL policy. Follow-up real campaign completed its available stages and saved source-linked Evaluator basis/results; one Challenger timeout ended at attempt 1 without retry, so real retry remains unverified. Browser showed prepared→progress→history state. See docs/S2-AUTO-RESEARCH-CAMPAIGN-cmvkwu1ey0001ve1krfjhwdo0.md. Reproduced and fixed retry loss when a failed concern-review had already consumed the per-position additional-check allowance. Existing route/engine path verified with a timeout transport mock, persisted attempt 2, lease concurrency, retry ceiling, budget stop, late Run, cancellation, and quota. No real provider retry. criterionBasis remains a model claim, not independent semantic verification; see docs/S2-RETRY-REGRESSION-DIAGNOSTIC.md. Final regression uses the real route and default executeRun with only the provider fetch intercepted. Seven ModelCall records are written; external network calls are zero. A failed concern-review now retries despite the consumed additional-check cap; the real provider retry is intentionally not repeated. criterionBasis remains a model self-report without independent semantic verification. See docs/S2-RETRY-REGRESSION-DIAGNOSTIC.md."
+      }
+    ],
+    "dependencies": [
+      "Existing project/version and campaign APIs",
+      "Existing source/run/evaluation links",
+      "API contract verification before controls are changed"
+    ],
+    "reuse": [
+      "ResearchCampaignPanel",
+      "SemanticCodemap/Atlas search",
+      "research-state",
+      "campaign API",
+      "handoff/export",
+      "role assignment UI"
+    ],
+    "api_changes": "Minimal adaptation: campaign route handler factory accepts an injectable run executor for isolated tests; create accepts an idempotency key and validates matching retries; control supports explicit prepared/start/pause/resume/cancel/update-budget operations; campaign DTO includes saved actual provider/model/ModelCall links. Semantic search now reports stale incompatibility without mutating saved embedding status. Campaign failure classification recognizes the persisted Russian FreeLLMAPI timeout message as temporary and retryable within maxRetriesPerAction. No schema migration or new execution endpoint. Follow-up: scenario-plan prompt now constrains evidence provenance; evaluator prompt receives the linked source Fragment text; localized timeout matching no longer treats generic network/refusal errors as temporary and cancelled Run status forbids retry. No schema or history change.",
+    "migrations": "None proposed for required scope. Persistent explanatory notes would require separate data-model review and are not a prerequisite.",
+    "risks": [
+      "Campaign status may be semantically weaker than its label",
+      "Hiding technical details may also hide serious errors",
+      "Context loss across routes",
+      "Stale or partial API data",
+      "Large lists and narrow viewport",
+      "Duplicate controls for campaign mutations"
+    ],
+    "rollback": "Existing manual studios and routes remain in navigation. Restore the previous default workspace in src/lib/store.ts (or restore the backed-up UI files) to return to the former Overview-first entry. No migration or research-record mutation was performed.",
+    "completion_criteria": [
+      "Required home → scope → policy → preview flow is browser-checked without model calls or working campaign mutation.",
+      "A real browser result/source/Run path is checked and absent links are reported honestly.",
+      "Campaign state lanes and saved provider/model provenance are displayed without inference.",
+      "Isolated archive round-trip remaps references, preserves history/policy/provenance, blocks unfinished continuation and imports no vectors.",
+      "Known browser branches that could not be tested safely remain explicitly partial or unknown.",
+      "Scenario criteria are checked against only the transmitted source and explicit connected context; unsupported criteria remain inconclusive, and a completed queue with incomplete Challenger is labeled as incomplete research."
+    ]
+  },
+  "acceptance": [
+    {
+      "id": "accept_home_to_campaign",
+      "check": "From project home choose a filtered scope, review preview and start only after explicit click; verify one campaign and expected scope/policy.",
+      "implementation_status": "implemented",
+      "verification_status": "mock_api_start_passed_browser_click_unverified",
+      "result": "Рабочий UI прошёл область, политику и preview; сохранение/запуск там не нажимались. Изолированная API acceptance создала одну кампанию по idempotent create, явно стартовала её, выполнила один mock action и подтвердила повторный start без дубликата. Браузер показал ранее завершённый fixture с двумя mock action/Run; кнопку старта повторно не нажимали. UI-клик старта в браузере не подтверждён."
+    },
+    {
+      "id": "accept_state_distinction",
+      "check": "Show campaign completion separately from exhausted budget, pending checks, automated conclusion and user decision.",
+      "implementation_status": "implemented",
+      "verification_status": "browser_checked",
+      "result": "В существующей кампании видны раздельно очередь, этапы, автоматическое заключение и статус положения; причины budget-exhausted отличаются от provider quota в реализации."
+    },
+    {
+      "id": "accept_evidence_navigation",
+      "check": "Open result, source, related Run/Observation/Scenario where present; show honest empty states where absent.",
+      "implementation_status": "implemented",
+      "verification_status": "partial_browser_checked",
+      "result": "Браузер прошёл результат → Fragment → связанные Scenario/Run → Behavior Lab. Для этой позиции нет наблюдения/discrepancy; пустое состояние наблюдений показано."
+    },
+    {
+      "id": "accept_route_truth",
+      "check": "Requested connection/model and actual provider/model are separately displayed; missing actual values read unknown.",
+      "implementation_status": "implemented",
+      "verification_status": "browser_checked",
+      "result": "Saved result различает connection/requested auto и сохранённые actual provider/model/ModelCall."
+    },
+    {
+      "id": "accept_progressive_detail",
+      "check": "Ordinary view is compact; advanced view reveals raw diagnostics without dropping errors.",
+      "implementation_status": "partially_implemented",
+      "verification_status": "partial_browser_checked",
+      "result": "Технический raw ответ/ID доступны в раскрываемом блоке Behavior Lab; часть Atlas/campaign технических панелей остаётся отдельными существующими разделами."
+    },
+    {
+      "id": "accept_context_restore",
+      "check": "Search query, mode, filters and selected version survive detail navigation and back.",
+      "implementation_status": "implemented",
+      "verification_status": "partial_browser_checked",
+      "result": "Браузерный setup draft сохраняет отфильтрованное положение и шаг после закрытия/возврата; полный Atlas query/filter/result restoration в этом проходе не повторялся."
+    },
+    {
+      "id": "accept_read_only_open",
+      "check": "Opening all panels and preview creates no Run, ModelCall, Finding, Note, campaign or status change.",
+      "implementation_status": "implemented",
+      "verification_status": "verified_by_isolated_checks",
+      "result": "Открытие Research/setup/preview в рабочем UI не изменило кампании; isolated scripts проверяют no-write preview и отсутствие Run/ModelCall до явного старта."
+    },
+    {
+      "id": "accept_accessibility_responsive",
+      "check": "Keyboard-only navigation, focus restoration, narrow viewport, long text and bounded large-list paging are usable.",
+      "implementation_status": "implemented",
+      "verification_status": "partial_browser_checked",
+      "result": "При 390×844 мобильная навигация раскрывается; document scrollWidth не превысил viewport. Полный keyboard-only и screen-reader сценарий не пройден."
+    },
+    {
+      "id": "accept_archive_integrity",
+      "check": "Export still distinguishes report and full archive; verify source counts and full archive preservation.",
+      "implementation_status": "implemented",
+      "verification_status": "isolated_round_trip_passed",
+      "result": "Синтетическая временная SQLite round-trip проверила кампанию/policy/actions, Run/ModelCall, решения/историю, блокировку продолжения и rebuild-on-import; рабочая база не импортировалась."
+    },
+    {
+      "id": "accept_scenario_provenance_and_retry",
+      "check": "Keep scenario requirement, test condition, derived behavior and hypothesis distinct; account for each retry; do not retry cancellation/quota/validation; reuse late completed Run without duplicate result.",
+      "implementation_status": "implemented",
+      "verification_status": "isolated_mock_passed_browser_unverified",
+      "result": "See docs/S2-SCENARIO-PROVENANCE-AND-RECOVERY.md. Isolated prompt capture confirms Evaluator receives the source text; three total timeout attempts each count against budget; cancellation and late completion do not create duplicate attempts. No real model calls. Browser display remains unverified under localhost URL policy."
+    }
+  ],
+  "priority_decisions": {
+    "recommended_option": "Make Research the campaign-first home while retaining Atlas and Behavior Lab as linked workspaces.",
+    "alternatives": [
+      {
+        "id": "alt_rearrange_existing_tabs",
+        "gain": "Lowest navigation change",
+        "cost": "Continues to make the user compose the path from separate tools."
+      },
+      {
+        "id": "alt_full_rewrite",
+        "gain": "Full information-architecture freedom",
+        "cost": "High risk, duplicated mechanisms and unnecessary implementation scope."
+      }
+    ],
+    "approval_needed": [],
+    "required_for_stage_2": [
+      "Required UI implementation stages (see implementation.stages.required)",
+      "API contract audit (verified on current handlers and isolated mock tests)",
+      "Browser acceptance required for core paths; untested branches remain explicitly partial"
+    ],
+    "optional": [
+      "Opt-in process notes and their export",
+      "Additional compact metrics",
+      "Moving every technical Atlas panel into a dedicated advanced mode, provided it does not block the accepted core path"
+    ],
+    "deferred": [
+      "Automatic result acceptance",
+      "Automatic instruction edits",
+      "New model explanations",
+      "Schema migration for notes",
+      "Full replacement of Atlas/Behavior Lab",
+      "Real model/embedding request during this acceptance"
+    ],
+    "accepted_decisions": [
+      {
+        "id": "decision_campaign_first",
+        "decision": "accepted",
+        "basis": [
+          "req_research_home",
+          "problem_manual_action_centric"
+        ]
+      },
+      {
+        "id": "decision_four_state_lanes",
+        "decision": "accepted",
+        "basis": [
+          "req_distinct_states",
+          "problem_campaign_state"
+        ]
+      },
+      {
+        "id": "decision_evidence_first_review",
+        "decision": "accepted",
+        "basis": [
+          "req_evidence"
+        ]
+      },
+      {
+        "id": "decision_route_provenance_labels",
+        "decision": "accepted",
+        "basis": [
+          "req_route_provenance",
+          "problem_route_labels"
+        ]
+      },
+      {
+        "id": "decision_ordinary_advanced",
+        "decision": "accepted",
+        "basis": [
+          "req_progressive_detail",
+          "problem_technical_density"
+        ]
+      },
+      {
+        "id": "decision_contextual_back",
+        "decision": "accepted",
+        "basis": [
+          "req_context_restore"
+        ]
+      },
+      {
+        "id": "decision_no_side_effect_open",
+        "decision": "accepted",
+        "basis": [
+          "req_safe_open"
+        ]
+      },
+      {
+        "id": "decision_optional_factual_notes",
+        "decision": "accepted_as_optional",
+        "basis": [
+          "user_stage_2_approval"
+        ]
+      }
+    ]
+  },
+  "validation": {
+    "status": "structural_checks_passed_manual_review_limited",
+    "json_parse": "passed_with_duplicate_key_detection",
+    "unique_ids": "passed",
+    "internal_refs": "passed_for_declared_id_references",
+    "required_sections": "passed",
+    "traceability": "checked_against_UI/components/routes and current browser path Follow-up scenario provenance and retry contract checked against saved campaign input, source Fragments, campaign engine and isolated mock acceptance; see docs/S2-SCENARIO-PROVENANCE-AND-RECOVERY.md. New linked campaign acceptance: see docs/S2-AUTO-RESEARCH-CAMPAIGN-cmvkwu1ey0001ve1krfjhwdo0.md; one retryable timeout occurred but no second attempt was persisted, so real retry remains unverified. Addressed retry regression reproduced on isolated SQLite through the existing research-campaign route handler: see docs/S2-RETRY-REGRESSION-DIAGNOSTIC.md. Concern-review retry now survives the additional-check cap; real provider retry remains intentionally unverified. Evaluator criterionBasis is recorded as model output, not independently validated semantic entailment. Final retry regression used the existing route and default executeRun, replacing only the FreeLLMAPI fetch transport; 7 mocked transport calls produced 7 normal ModelCall records and 0 external network calls. The concern-review gate fix passed restart, concurrent lease, budget, retry-cap, late-result, cancel and quota cases. See docs/S2-RETRY-REGRESSION-DIAGNOSTIC.md.",
+    "state_mutation_consistency": "Working project and campaigns were not mutated. Theme preference was restored to its prior dark/teal value. Isolated process-control tests used a diagnostic SQLite fixture and made no model/embedding calls.",
+    "existing_vs_proposed_review": "reviewed",
+    "implementation_not_applied": false,
+    "semantic_limit": "Изолированный fixture проверяет сериализацию/импорт и ссылки, но не моделирует реальное исполнение и не подтверждает семантическую корректность исследовательских данных. The follow-up audit confirmed that criterionBasis=supported is a model assertion accepted by CampaignCheck; no independent source-to-criterion entailment verifier exists. See docs/S2-RETRY-REGRESSION-DIAGNOSTIC.md. The final audit confirms criterionBasis=supported is a model assertion accepted by CampaignCheck rather than an independently verified entailment; one saved 6.2.1.1 criterion overextended its source. This remains an explicit limitation, not a new model-judge feature.",
+    "duplicate_keys": "passed_no_duplicates_after_r9",
+    "browser_acceptance": "Browser checked on 3102: the linked follow-up campaign appeared in the process header/list, opened to progress, and after completion remained available in history with 16 child actions and final incomplete conclusions. This verifies the displayed saved campaign state, not every setup mutation or the semantic validity of model judgments.",
+    "archive_roundtrip": "passed_on_isolated_temporary_sqlite",
+    "working_data": "not_changed_by_acceptance"
+  },
+  "status": {
+    "project_decision": "accepted",
+    "implementation": "implemented_with_partial_browser_acceptance",
+    "stage": "2_of_2_implementation_present_process_mutation_browser_acceptance_partial",
+    "application_ui_changed": true,
+    "research_data_changed": false,
+    "unresolved_decisions": [],
+    "known_unverified": [
+      "Полный keyboard-only и screen-reader путь; browser-level loading/error/partial simulation не выполнены.",
+      "UI click запуска не подтверждён: изолированный fixture был завершён предыдущей API-проверкой до браузерного просмотра; повторный запуск не делался. API mock start подтверждён отдельно.",
+      "Возврат observation/discrepancy к положению не проходился.",
+      "Реальные provider/model вызовы намеренно не проверялись.",
+      "Браузерные клики pause/stop/reconcile/retry/restart на изолированном стенде не выполнены в этом pass; API/mock acceptance прошла, но не заменяет UI acceptance.",
+      "Все десять сочетаний light/dark × пять палитр не проверены; проверялись dark teal, dark emerald, light emerald и mobile layout по ранее зафиксированным браузерным наблюдениям.",
+      "Embedding indexOne не имеет отдельного cancel controller; очередь честно помечает его только для просмотра.",
+      "Для follow-up достоверности сценариев UI-уведомление «Очередь завершена. Исследование неполное: Challenger не завершён» и действие перехода к новому исследованию не прошли браузерную проверку; localhost URL policy не обходилась."
+    ],
+    "accepted_decisions": [
+      {
+        "id": "decision_campaign_first",
+        "decision": "accepted",
+        "basis": [
+          "req_research_home",
+          "problem_manual_action_centric"
+        ]
+      },
+      {
+        "id": "decision_four_state_lanes",
+        "decision": "accepted",
+        "basis": [
+          "req_distinct_states",
+          "problem_campaign_state"
+        ]
+      },
+      {
+        "id": "decision_evidence_first_review",
+        "decision": "accepted",
+        "basis": [
+          "req_evidence"
+        ]
+      },
+      {
+        "id": "decision_route_provenance_labels",
+        "decision": "accepted",
+        "basis": [
+          "req_route_provenance",
+          "problem_route_labels"
+        ]
+      },
+      {
+        "id": "decision_ordinary_advanced",
+        "decision": "accepted",
+        "basis": [
+          "req_progressive_detail",
+          "problem_technical_density"
+        ]
+      },
+      {
+        "id": "decision_contextual_back",
+        "decision": "accepted",
+        "basis": [
+          "req_context_restore"
+        ]
+      },
+      {
+        "id": "decision_no_side_effect_open",
+        "decision": "accepted",
+        "basis": [
+          "req_safe_open"
+        ]
+      },
+      {
+        "id": "decision_optional_factual_notes",
+        "decision": "accepted_as_optional",
+        "basis": [
+          "user_stage_2_approval"
+        ]
+      }
+    ],
+    "revision_history": [
+      {
+        "revision": "r1",
+        "state": "Исходное проектное решение этапа 1",
+        "source": "docs/S2-UI-REMODIFICATION-REVIEW.md"
+      },
+      {
+        "revision": "r2",
+        "state": "Согласованное уточнение пользователя этапа 2",
+        "source": "Текущий запрос пользователя: причины остановки; четыре состояния; сохранение инструментов; безопасный поиск; рабочая область; честный preview; изолированная приёмка."
+      },
+      {
+        "revision": "r3",
+        "state": "Фактическая частичная реализация и результаты проверок",
+        "source": "docs/S2-UI-IMPLEMENTATION-REPORT.md и docs/S2-UI-REMODIFICATION-REVIEW.md; UI изменён, рабочие данные сохранены, часть полной матрицы acceptance оставлена непроверенной."
+      },
+      {
+        "revision": "r4",
+        "state": "Корректировка статусов и фактическая приёмка; core Research путь и изолированный archive round-trip проверены, полная браузерная матрица остаётся частичной.",
+        "source": "Текущий запрос пользователя; browser session localhost:3102; scripts/s2-isolated-flow-acceptance.mjs на временной SQLite; docs/S2-UI-IMPLEMENTATION-REPORT.md и worklog.md"
+      },
+      {
+        "revision": "r5",
+        "state": "Уточнён объём UI/isolated-проверки: рабочий проект просмотрен без мутаций, isolated API mock запуск завершил одну очередь; UI click второго запуска не повторяли, полный браузерный сценарий остаётся частичным.",
+        "source": "Текущий браузерный проход 3102 и 3103; scripts/s2-isolated-research-ui-acceptance.mjs; scripts/s2-isolated-flow-acceptance.mjs; текущий diff/review."
+      },
+      {
+        "revision": "r6",
+        "state": "Добавлены сохраняемая акцентная палитра и раздельные маркеры типа/статуса; предел кампании расширен до безопасного целого или явного null без общего предела. Изолированные проверки прошли; рабочие кампании и модельные вызовы не затрагивались.",
+        "source": "Адресная read-only сверка D:\\dev\\personal\\projects\\mmss-observatory-final; изменения S2 по палитре и campaign budget; scripts/s2-isolated-research-ui-acceptance.mjs, scripts/s2-isolated-flow-acceptance.mjs и целевые локальные тесты."
+      },
+      {
+        "revision": "r7",
+        "state": "Темы и центр процессов: общие surface tokens для пяти независимых палитр; проекция существующих владельцев процессов; безопасные lifecycle controls и browser-local archive. Изолированные mock/API проверки прошли; браузерная проверка mutation controls остаётся частичной.",
+        "source": "Текущий запрос пользователя; scripts/s2-isolated-process-center-acceptance.mjs; TypeScript/Prisma/targeted tests; ранее сохранённая браузерная проверка S2 :3102; docs/S2-UI-IMPLEMENTATION-REPORT.md и worklog.md."
+      },
+      {
+        "revision": "r8",
+        "state": "Уточнено сообщение пустой очереди: отсутствие активных процессов отделено от пустой истории и от пустой выдачи фильтра. Исправлена классификация локализованного FreeLLMAPI timeout как временной ошибки; unit и isolated mock acceptance проверили последовательную повторную попытку. Реальная кампания dd2709814cec459aad6fa6b8c4455ad3 завершилась после 14/30 действий с insufficient-data по обоим положениям из-за двух Challenger timeout до применения исправления; сохранённые результаты не переписывались. Проверки UI в браузере для этой кампании не проводились.",
+        "source": "docs/S2-AUTO-RESEARCH-CAMPAIGN-dd2709814cec459aad6fa6b8c4455ad3.md; src/lib/research-campaign-core.ts; src/lib/research-campaign-core.test.ts; scripts/s2-isolated-research-ui-acceptance.mjs; process-center-studio.tsx; worklog.md."
+      },
+      {
+        "revision": "r9",
+        "state": "Уточнено происхождение критериев и восстановление незавершённых проверок: добавлены ограничения генерации/оценки сценариев, сужена классификация retry, отдельно показана завершённая очередь при неполном Challenger. Историческая кампания не изменена; изолированные mock проверки пройдены, браузерная проверка заблокирована policy.",
+        "source": "Текущий запрос пользователя; docs/S2-SCENARIO-PROVENANCE-AND-RECOVERY.md; src/lib/research-campaign-engine.ts; src/lib/research-campaign-core.ts; scripts/s2-isolated-research-ui-acceptance.mjs; worklog.md."
+      }
+    ]
+  }
+}

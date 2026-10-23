@@ -1,0 +1,588 @@
+// MMSS Skill Observatory — Prisma schema (SQLite)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// A research project: one instruction document under study + all research data.
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  origin      String   @default("user") // "seed" | "user" | "import"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  documents    Document[]
+  connections  Connection[]
+  scenarios    Scenario[]
+  runs         Run[]
+  findings     Finding[]
+  notes        Note[]
+  chatMessages ChatMessage[]
+  assignments  Assignment[]
+  modelCalls   ModelCall[]
+  semanticPositions SemanticPosition[]
+  semanticRelations SemanticRelation[]
+  positionObservations PositionObservation[]
+  embeddingVectors EmbeddingVector[]
+  researchCampaigns ResearchCampaign[]
+}
+
+// An instruction document (e.g. SKILL.md). Versions hold actual content.
+model Document {
+  id        String           @id @default(cuid())
+  projectId String
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String
+  createdAt DateTime         @default(now())
+  versions  DocumentVersion[]
+
+  @@index([projectId])
+}
+
+// Immutable version of document content. Experimental branches reference a parent.
+model DocumentVersion {
+  id              String    @id @default(cuid())
+  documentId      String
+  document        Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  projectId       String
+  label           String // "origin" | "experiment-1" | ...
+  kind            String // "original" | "experimental" | "restored" | "remote"
+  source          String // "attachment" | "paste" | "upload" | "github" | "branch" | "restore"
+  sourceUrl       String?
+  knownVersion    String? // e.g. "0.1.4" from front-matter
+  completeness    String    @default("full") // "full" | "partial" | "unknown"
+  content         String
+  contentHash     String // sha256 hex
+  parentVersionId String?
+  note            String? // user description of this version
+  importDate      DateTime  @default(now())
+  isActive        Boolean   @default(false) // current working version
+  fragments       Fragment[]
+  analyses        Analysis[]
+  semanticPositions SemanticPosition[]
+  semanticRelations SemanticRelation[]
+  positionObservations PositionObservation[]
+  embeddingVectors EmbeddingVector[]
+  researchCampaigns ResearchCampaign[]
+
+  @@index([documentId])
+  @@index([projectId])
+}
+
+// Parsed structural unit of a version: section / paragraph / sentence / list_item.
+model Fragment {
+  id        String          @id @default(cuid())
+  versionId String
+  version   DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  kind      String // "section" | "paragraph" | "sentence" | "list_item"
+  path      String // "2" | "2.4" | "2.4.2" (section paragraph sentence)
+  order     Int
+  title     String? // for sections
+  text      String
+  startLine Int
+  endLine   Int
+  meta      String          @default("{}") // JSON: { wordCount, listIndex, indent }
+  semanticLinks SemanticPositionFragment[]
+  embeddingVectors EmbeddingVector[]
+  campaignCheckSources ResearchCampaignCheckSource[]
+  campaignActionSources ResearchCampaignActionSource[]
+
+  @@index([versionId])
+}
+
+// A persisted analysis result bound to a version.
+model Analysis {
+  id            String         @id @default(cuid())
+  versionId     String
+  version       DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  projectId     String
+  type          String // "local-structural" | "model-interpret" | "impact" | "remote-check"
+  backend       String // "local" | "ollama" | "session-cloud"
+  model         String?
+  status        String // "completed" | "failed"
+  summary       String // human-readable method summary (RU)
+  result        String // JSON payload
+  fragmentCount Int?
+  durationMs    Int?
+  error         String?
+  createdAt     DateTime       @default(now())
+
+  @@index([versionId])
+}
+
+// User-reviewed functional interpretation bound to one immutable document version.
+model SemanticPosition {
+  id                 String   @id @default(cuid())
+  projectId          String
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId          String
+  version            DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  title              String
+  purpose            String
+  regulatedDecision  String
+  conditions         String
+  expectedBehavior   String
+  limitations        String   @default("")
+  provenance         String   @default("user") // user | model-interpret
+  provenanceRef      String?
+  sourceFragmentRefs String   @default("[]") // historical source IDs/paths preserved on import when a live match is unavailable
+  status             String   @default("proposed") // proposed | accepted | disputed
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  fragments          SemanticPositionFragment[]
+  outgoingRelations  SemanticRelation[] @relation("SemanticRelationSource")
+  incomingRelations  SemanticRelation[] @relation("SemanticRelationTarget")
+  observations       PositionObservation[]
+  embeddingVectors   EmbeddingVector[]
+  researchCampaignPositions ResearchCampaignPosition[]
+
+  @@index([projectId, versionId])
+}
+
+model SemanticPositionFragment {
+  id                 String @id @default(cuid())
+  semanticPositionId String
+  semanticPosition   SemanticPosition @relation(fields: [semanticPositionId], references: [id], onDelete: Cascade)
+  fragmentId         String
+  fragment           Fragment @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+
+  @@unique([semanticPositionId, fragmentId])
+  @@index([fragmentId])
+}
+
+model SemanticRelation {
+  id                String @id @default(cuid())
+  projectId         String
+  project           Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId         String
+  version           DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  sourcePositionId  String
+  sourcePosition    SemanticPosition @relation("SemanticRelationSource", fields: [sourcePositionId], references: [id], onDelete: Cascade)
+  targetPositionId  String
+  targetPosition    SemanticPosition @relation("SemanticRelationTarget", fields: [targetPositionId], references: [id], onDelete: Cascade)
+  kind              String // clarifies | limits | requires | excludes | supports | potential-conflict
+  rationale         String
+  provenance        String @default("user") // user | model-proposal
+  status            String @default("proposed") // proposed | accepted | disputed
+  createdAt         DateTime @default(now())
+
+  @@index([projectId, versionId])
+  @@index([sourcePositionId, targetPositionId])
+}
+
+model PositionObservation {
+  id           String @id @default(cuid())
+  projectId    String
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId    String
+  version      DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  positionId   String
+  position     SemanticPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  runId        String?
+  sourceRunId  String? // historical reference if imported archive omitted the Run part
+  run          Run? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  noteId       String?
+  sourceNoteId String? // historical reference if imported archive omitted the Note part
+  note         Note? @relation(fields: [noteId], references: [id], onDelete: SetNull)
+  observation  String
+  evidenceText String @default("")
+  conditions   String @default("")
+  criterion    String @default("")
+  status       String @default("unverified") // error | suspected | confirmed-instruction-issue | supported | app-or-check-error | unverified
+  limitations  String @default("")
+  createdAt    DateTime @default(now())
+  embeddingVectors EmbeddingVector[]
+
+  @@index([projectId, versionId])
+  @@index([positionId])
+  @@index([runId])
+  @@index([noteId])
+}
+
+// Exact vectors are independent for functional descriptions, source text and observations.
+// Imported projects rebuild vectors instead of trusting runtime/model compatibility.
+model EmbeddingVector {
+  id               String @id @default(cuid())
+  projectId        String
+  project          Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId        String
+  version          DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  fragmentId       String?
+  fragment          Fragment? @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+  positionId       String?
+  position          SemanticPosition? @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  observationId    String?
+  observation       PositionObservation? @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  representation   String // functional | source | observation
+  model            String
+  dimensions       Int
+  textHash         String
+  formatVersion    Int @default(1)
+  vector           String // JSON number[]
+  status           String @default("ready") // ready | stale | failed
+  error            String?
+  updatedAt        DateTime @updatedAt
+
+  @@unique([fragmentId, representation, model, formatVersion])
+  @@unique([positionId, representation, model, formatVersion])
+  @@unique([observationId, representation, model, formatVersion])
+  @@index([projectId, versionId, representation, status])
+}
+
+// User/model note attached to a fragment (or general).
+model Note {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId     String?
+  fragmentId    String? // null => general remark
+  kind          String    @default("note") // "note" | "interpretation" | "objection" | "user-verdict" | "todo"
+  body          String
+  author        String    @default("user") // "user" | "model"
+  origin        String    @default("real") // "real" | "demo"
+  linkedRunId   String?
+  createdAt     DateTime  @default(now())
+  positionObservations PositionObservation[]
+
+  @@index([projectId])
+  @@index([fragmentId])
+}
+
+// Scenario tree node.
+model Scenario {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentId    String?
+  title       String
+  description String?
+  status      String    @default("unexplored") // unexplored|explored|synthetic|run-verified|disputed|stopped
+  stopReason  String?
+  origin      String    @default("user") // user | model | seed | demo
+  fragmentId  String?
+  campaignPositionId String?
+  campaignPosition ResearchCampaignPosition? @relation(fields: [campaignPositionId], references: [id], onDelete: SetNull)
+  campaignCheck ResearchCampaignCheck?
+  generationMetadata String? // JSON: requested backend/model and actual provider/model for model-generated scenarios
+  pinned      Boolean   @default(false)
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  runs        Run[]
+
+  @@index([projectId])
+}
+
+// One execution of a role on some input. Statuses: planned|queued|running|completed|cancelled|failed
+model Run {
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenarioId     String?
+  scenario       Scenario? @relation(fields: [scenarioId], references: [id], onDelete: SetNull)
+  versionId      String?
+  parentRunId    String? // e.g. evaluator run linked to executor run
+  role           String // executor|explorer|evaluator|challenger|editor|assistant|interpreter
+  backend        String // "ollama" | "freellmapi" | "session-cloud" | "demo"
+  connectionId   String?
+  connectionName String? // snapshot of connection name at run time
+  model          String?
+  status         String    @default("queued") // planned|queued|running|completed|cancelled|failed
+  input          String // JSON: { prompt, messages, settings, programChecks }
+  output         String?
+  error          String?
+  verdict        String? // pass|fail|inconclusive (final verdict, may be user override)
+  verdictBy      String? // "model" | "user" | "program"
+  modelVerdict   String? // original model verdict preserved on override
+  modelVerdictBy String?
+  durationMs     Int?
+  tokensIn       Int?
+  tokensOut      Int?
+  origin         String    @default("real") // real | demo
+  createdAt      DateTime  @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  updatedAt      DateTime  @updatedAt
+  positionObservations PositionObservation[]
+  campaignActionId String? @unique
+  campaignAction ResearchCampaignAction? @relation(fields: [campaignActionId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([scenarioId])
+}
+
+// A bounded, resumable research run over an explicit snapshot of one document version.
+model ResearchCampaign {
+  id                    String   @id @default(cuid())
+  predecessorCampaignId String?
+  processHistory        String   @default("[]") // process restart/reconciliation audit; not model output or decision history
+  projectId             String
+  project               Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId             String
+  version               DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  contentHash           String
+  scopeType             String   // version | sections | positions
+  scopeSnapshot         String   @default("{}") // exact selected section paths and position IDs
+  depth                 String   @default("full") // interpretation | interactions | scenarios | full
+  maxScenariosPerPosition Int    @default(2)
+  maxModelActions       Int?     @default(20) // null = explicitly unlimited; legacy rows stay limited at their saved value
+  budgetHistory         String   @default("[]") // explicit user-confirmed budget changes
+  maxAdditionalChecksPerPosition Int @default(1)
+  maxRetriesPerAction   Int      @default(3)
+  maxConcurrent         Int      @default(1)
+  stopOnQuota           Boolean  @default(true)
+  stopOnTechnicalError  Boolean  @default(false)
+  allowRewriteExperiment Boolean @default(false)
+  status                String   @default("prepared") // prepared | running | paused | completed | cancelled | blocked
+  stage                 String   @default("interpretation")
+  modelActionsUsed      Int      @default(0)
+  unmappedFragmentsCount Int     @default(0)
+  pauseReason           String?
+  lastError             String?
+  workerToken           String?
+  workerLeaseUntil      DateTime?
+  startedAt             DateTime?
+  finishedAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  items                 ResearchCampaignPosition[]
+  roles                 ResearchCampaignRole[]
+  actions               ResearchCampaignAction[]
+
+  @@index([projectId, versionId, createdAt])
+}
+
+// Exact role routing snapshot used by a campaign. Connection IDs are historical metadata only.
+model ResearchCampaignRole {
+  id             String @id @default(cuid())
+  campaignId     String
+  campaign       ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  role           String
+  backend        String
+  connectionId   String
+  connectionName String
+  model          String
+
+  @@unique([campaignId, role])
+}
+
+// One explicitly selected position in the campaign's scope.
+model ResearchCampaignPosition {
+  id                  String @id @default(cuid())
+  campaignId          String
+  campaign            ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  positionId          String
+  position            SemanticPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  order               Int
+  status              String @default("unexplored") // unexplored | in-progress | completed | blocked
+  stage               String @default("interpretation")
+  interpretationStatus String @default("pending")
+  interactionStatus   String @default("pending")
+  scenarioStatus      String @default("pending")
+  executionStatus     String @default("pending")
+  reviewStatus        String @default("pending")
+  verifiedSourceEvidence Boolean @default(false)
+  additionalChecksUsed Int @default(0)
+  conclusion          String @default("not-explored") // no-issue-in-checked-cases | likely-revision | insufficient-data | blocked | in-progress | not-explored
+  conclusionSummary   String?
+  limitations         String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  scenarios           Scenario[]
+  checks              ResearchCampaignCheck[]
+  notApplicableChecks ResearchCampaignNotApplicableCheck[]
+  actions             ResearchCampaignAction[]
+
+  @@unique([campaignId, positionId])
+  @@index([campaignId, order])
+}
+
+model ResearchCampaignNotApplicableCheck {
+  id                 String @id @default(cuid())
+  campaignPositionId String
+  campaignPosition   ResearchCampaignPosition @relation(fields: [campaignPositionId], references: [id], onDelete: Cascade)
+  checkType          String
+  rationale          String
+  createdAt          DateTime @default(now())
+
+  @@index([campaignPositionId])
+}
+
+// A scenario plan is stored separately from the display text so its criterion cannot drift during evaluation.
+model ResearchCampaignCheck {
+  id                 String @id @default(cuid())
+  campaignPositionId String
+  campaignPosition   ResearchCampaignPosition @relation(fields: [campaignPositionId], references: [id], onDelete: Cascade)
+  scenarioId         String @unique
+  scenario           Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  ordinal            Int
+  objective          String
+  input              String
+  expectedBehavior   String
+  criterion          String
+  status             String @default("planned") // planned | running | completed | inconclusive | blocked
+  sources            ResearchCampaignCheckSource[]
+  actions            ResearchCampaignAction[]
+  createdAt          DateTime @default(now())
+
+  @@index([campaignPositionId, ordinal])
+}
+
+model ResearchCampaignCheckSource {
+  id        String @id @default(cuid())
+  checkId   String
+  check     ResearchCampaignCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  fragmentId String
+  fragment  Fragment @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+
+  @@unique([checkId, fragmentId])
+}
+
+// Each planned/started action is persisted before a provider request and linked to its Run.
+model ResearchCampaignAction {
+  id                  String @id @default(cuid())
+  actionKey           String @unique
+  campaignId          String
+  campaign            ResearchCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignPositionId  String
+  campaignPosition    ResearchCampaignPosition @relation(fields: [campaignPositionId], references: [id], onDelete: Cascade)
+  scenarioId          String?
+  checkId             String?
+  check               ResearchCampaignCheck? @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  actionType          String // interpretation | interaction | scenario-plan | executor | evaluator | challenger
+  role                String
+  attempt             Int
+  status              String @default("planned") // planned | running | completed | failed | blocked | cancelled
+  error               String?
+  run                 Run?
+  sources             ResearchCampaignActionSource[]
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([campaignId, status])
+  @@index([campaignPositionId, actionType, scenarioId])
+}
+
+model ResearchCampaignActionSource {
+  id         String @id @default(cuid())
+  actionId   String
+  action     ResearchCampaignAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  fragmentId String
+  fragment   Fragment @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+
+  @@unique([actionId, fragmentId])
+  @@index([fragmentId])
+}
+
+// A finding/observation with evidence chain.
+model Finding {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId   String?
+  fragmentId  String?
+  scenarioId  String?
+  runId       String?
+  title       String
+  description String
+  severity    String   @default("info") // info | warning | issue
+  status      String   @default("hypothesis") // hypothesis|supported|disputed|rejected
+  provenance  String   @default("local-heuristic") // local-heuristic | model | user
+  origin      String   @default("real") // real | demo
+  evidence    String   @default("{}") // JSON EvidenceChain
+  createdAt   DateTime @default(now())
+
+  @@index([projectId])
+  @@index([versionId])
+}
+
+// Ollama connection config. No secrets are stored.
+model Connection {
+  id          String    @id @default(cuid())
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  kind        String    @default("ollama")
+  baseUrl     String
+  status      String    @default("unknown") // unknown | ok | error
+  lastError   String?
+  lastCheckAt DateTime?
+  models      String    @default("[]") // JSON ModelInfo[] cache
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// Role -> backend/model assignment per project.
+model Assignment {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role         String // executor|explorer|evaluator|challenger|editor|assistant|interpreter|embedding
+  backend      String? // "ollama" | "freellmapi" | "session-cloud" | null (not assigned)
+  connectionId String?
+  model        String?
+  updatedAt    DateTime @updatedAt
+
+  @@unique([projectId, role])
+}
+
+// Research assistant chat history.
+model ChatMessage {
+  id                String   @id @default(cuid())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role              String // "user" | "assistant"
+  content           String
+  backend           String?
+  connectionName    String?
+  model             String?
+  responseMetadata  String? // JSON: actual provider/model; null for historical messages
+  contextFragmentId String?
+  createdAt         DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// One provenance record per actual text-model invocation; generated children reference its ID.
+model ModelCall {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId           String?
+  role            String
+  action          String
+  versionId       String?
+  contextMode     String   @default("unknown")
+  contextMetadata String   @default("{}")
+  messages        String
+  backend         String
+  connectionId   String?
+  connectionName String?
+  requestedModel String?
+  actualProvider String?
+  actualModel    String?
+  status          String   @default("running")
+  relatedEntities String  @default("[]")
+  createdAt       DateTime @default(now())
+
+  @@index([projectId])
+  @@index([runId])
+}
+
+// App-level key/value settings (seeded flag etc).
+model Setting {
+  key   String @id
+  value String // JSON
+}
